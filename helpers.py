@@ -16,6 +16,10 @@ from rdkit.ML.Cluster import Butina  # type: ignore
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score, silhouette_samples
 
+from PIL import Image
+from typing import Optional
+
+
 class ButinaCluster:
 
     def __init__(self, fptype: str="rdkit"):
@@ -23,7 +27,8 @@ class ButinaCluster:
 
     
     def cluster_smiles(
-            self, df: pd.DataFrame, 
+            self, 
+            df: pd.DataFrame, 
             sim_cutoff: float=0.8, 
             column_name: str="SMILES"
         ) -> list:
@@ -38,10 +43,31 @@ class ButinaCluster:
         return self.cluster_mols(mols, sim_cutoff)
     
 
+    def get_mols(self, df: pd.DataFrame, column_name: str="SMILES") -> list:
+        """Get just the Molds from SMILES strings"""
+        assert column_name in df.columns
+        return [Chem.MolFromSmiles(x) for x in df[column_name]]
+    
+
+    def set_fps(self, mols: list[Chem.rdchem.Mol]) -> None:
+        """ Set fingerprint of defined type (rdkit or Morgan) """
+        fp_dict = {
+            "rdkit": [Chem.RDKFingerprint(x) for x in mols],
+            "morgan": [AllChem.GetMorganFingerprintAsBitVect(x, 2) for x in mols]
+        }
+
+        if fp_dict[self.fptype] is None:
+            raise ValueError(f"Fingerprint method {self.fptype} not supported")
+        
+        self.fp_list = fp_dict[self.fptype]
+
+
     def get_fps(self, mols: list[Chem.rdchem.Mol]) -> list:
         """
         Get fingerprint of defined type (rdkit or Morgan)
         from the SMILES
+
+        :param do_butina: Whether to use the Butina algorithm
         """
         fp_dict = {
             "rdkit": [Chem.RDKFingerprint(x) for x in mols],
@@ -54,7 +80,7 @@ class ButinaCluster:
         return fp_dict[self.fptype]
     
 
-    def add_fps_to_df(self, df: pd.DataFrame, column_name: str) -> pd.DataFrame:
+    def add_fps_to_df(self, df: pd.DataFrame, column_name: Optional[str]=None) -> pd.DataFrame:
         """
         Add new columns to the passed DataFrame
         """
@@ -199,6 +225,27 @@ def get_cluster_imgs(df: pd.DataFrame, cluster: str="K_Means") -> dict:
     return imgs
 
 # %%
+def get_imgs(df: pd.DataFrame) -> Image:
+    """
+    Draw images for all compounds given in a DataFrame
+    MUST contain a column called SMILES, containing the SMILES string for the compound
+
+    Returns an Image object
+    """
+    assert "SMILES" in df.columns
+
+    smiles = df.SMILES
+    return Draw.MolsToGridImage(
+        smiles.apply(Chem.MolFromSmiles),
+        molsPerRow=5,
+        maxMols=100,
+        returnPNG=True
+    )
+
+
+
+
+# %%
 def save_cluster_imgs(imgs: dict, path: str=".") -> None:
     """
     Simply save cluster images in current directory
@@ -317,4 +364,19 @@ def calc_logp(smiles: list[str] | pd.Series,) -> list[float]:
 
     logp = [Descriptors.MolLogP(Chem.MolFromSmiles(smile)) for smile in smiles]
     return logp
+# %%
+
+def ensure_hits_in_lib(lib: pd.DataFrame, hits: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ensure that all SMILES in the hits are in the library
+    From the hits, check if they're in the lib
+    If not, add them to the lib
+    """
+    assert "SMILES" in lib.columns and "SMILES" in hits.columns
+
+    hits_from_lib = get_hits_from_lib(lib, hits)
+    matching = hits.SMILES.isin(hits_from_lib.SMILES)
+    missing_hits = hits.loc[~matching, :]
+    combined_lib = pd.concat([lib, missing_hits])
+    return combined_lib
 # %%
